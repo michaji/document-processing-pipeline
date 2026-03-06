@@ -221,9 +221,23 @@ test_output/json/*.json
 tmp_output/parquet/*.parquet
 tmp_output/json/*.json
 
+#Additional files to ignore
+**/sample_data
+**/uploads
 
 
-# test_integration.py
+# **/tmp_output/*
+# **/test_output/*
 
-test_output/parquet/doc-3.parquet
+test_integration.py
+fetch_doc_test.py
+inspect_real_outputs.py
+test_real_pipeline.py
+test_real_llm.py
+upload_test.py
+verify_upload.py
+assessment.md
+
+# test_output/parquet/doc-3.parquet
+# docs/operational_assessment.md
 docs/operational_assessment.md

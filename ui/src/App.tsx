@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
     FileText, CheckCircle, AlertTriangle, Clock,
     Settings, User, BarChart2, Check, AlertCircle,
-    Layers, Filter, ArrowDownUp
+    Layers, Filter, ArrowDownUp, Upload
 } from 'lucide-react';
 import './index.css';
 
@@ -166,6 +166,35 @@ export default function App() {
         if (reason) submitAction("REJECTED", reason);
     };
 
+    const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        setIsLoading(true);
+        setErrorMsg(null);
+        try {
+            const res = await fetch(`${API_URL}/upload`, {
+                method: "POST",
+                body: formData,
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                throw new Error(data.detail || "Upload failed");
+            }
+            // Wait a few seconds for background LLM processing, then refresh
+            setTimeout(fetchQueueAndStats, 5000);
+        } catch (err: any) {
+            console.error("Upload error", err);
+            setErrorMsg(err.message);
+        } finally {
+            setIsLoading(false);
+            e.target.value = ""; // reset
+        }
+    };
+
     return (
         <div className="layout">
             {/* HEADER */}
@@ -176,6 +205,10 @@ export default function App() {
                     <div className="badge-pill">Human Review</div>
                 </div>
                 <div className="header-nav">
+                    <label className="nav-btn" aria-label="Upload Document" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }} title="Upload test PDF">
+                        <Upload size={20} />
+                        <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleUpload} />
+                    </label>
                     <button className="nav-btn" aria-label="Settings"><Settings size={20} /></button>
                     <button className="nav-btn" aria-label="User Profile"><User size={20} /></button>
                 </div>
@@ -274,9 +307,17 @@ export default function App() {
                                 <p>Document processed successfully. Select next from queue.</p>
                             </div>
                         ) : selectedItem ? (
-                            <p style={{ color: 'var(--text-muted)' }}>
-                                [ Render Document Details for {selectedItem.documentId} ]
-                            </p>
+                            <iframe
+                                src={`${API_URL}/documents/${selectedItem.documentId}`}
+                                title={`Document ${selectedItem.documentId}`}
+                                style={{
+                                    width: '100%',
+                                    height: '100%',
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    minHeight: '600px'
+                                }}
+                            />
                         ) : (
                             <p>Select a document from the queue to start reviewing.</p>
                         )}

@@ -1,13 +1,22 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone, timedelta
+import os
+import glob
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+# Ensure upload dir 
+os.makedirs("uploads", exist_ok=True)
 
+import logging
 from src.infrastructure import init_db
 from src.monitoring import SLAMonitor
 from src.review_queue import ReviewQueueManager
+
+logger = logging.getLogger(__name__)
 
 sla_monitor = SLAMonitor()
 queue_manager = ReviewQueueManager()
@@ -130,6 +139,75 @@ def get_health():
     return sla_monitor.get_status()
 
 
+def _process_document_background(clean_id: str, filepath: str):
+    """Background task to run the document through the pipeline."""
+    import fitz  # PyMuPDF
+    import time
+    
+    text = ""
+    try:
+        # Extract text from PDF
+        pdf_document = fitz.open(filepath)
+        for page in pdf_document:
+            text += page.get_text() + "\n"
+        pdf_document.close()
+    except Exception as e:
+        logger.error(f"Failed to parse PDF {filepath}: {e}")
+        return
+
+    from src.workflow_executor import build_invoice_pipeline, WorkflowExecutor
+    wf = build_invoice_pipeline()
+    executor = WorkflowExecutor()
+    
+    logger.info(f"Starting pipeline execution for {clean_id}...")
+    try:
+        executor.execute(
+            workflow=wf,
+            initial_context={
+                "document_id": clean_id,
+                "payload": text.encode('utf-8')
+            }
+        )
+        logger.info(f"Pipeline execution completed for {clean_id}")
+    except Exception as e:
+        logger.error(f"Pipeline execution failed for {clean_id}: {e}", exc_info=True)
+
+@app.post("/api/upload")
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """Upload a real document for end-to-end extraction and queueing."""
+    import os as _os, time
+    safe_name = _os.path.basename(file.filename or "upload")
+    if not safe_name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDFs are supported for upload.")
+    
+    clean_id = safe_name.rsplit(".", 1)[0] + f"_{int(time.time())}"
+    filepath = f"uploads/{clean_id}.pdf"
+    
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+        
+    background_tasks.add_task(_process_document_background, clean_id, filepath)
+    
+    return {"status": "success", "message": f"{file.filename} queued for processing"}
+
+@app.get("/api/documents/{document_id}")
+def get_document(document_id: str):
+    """Serve the PDF file for previewing in the UI."""
+    # First check uploads dir
+    up_path = f"uploads/{document_id}.pdf"
+    if os.path.exists(up_path):
+        return FileResponse(up_path, media_type="application/pdf")
+        
+    # Then check sample_data 
+    matches = glob.glob(f"sample_data/documents/{document_id}*.pdf")
+    if matches:
+        return FileResponse(matches[0], media_type="application/pdf")
+        
+    # As fallback, just return 404
+    raise HTTPException(status_code=404, detail="Document not found for preview")
+
+
 @app.post("/api/seed")
 def seed_demo_data(count: int = 10):
     """Seed the review queue with realistic sample documents for demo/testing."""
@@ -177,6 +255,41 @@ def seed_demo_data(count: int = 10):
 
     return {"seeded": len(created_ids), "item_ids": created_ids}
 
+@app.delete("/api/reset")
+def reset_all_data():
+    """Wipe all rows from review_queue and document_metadata tables (dev/test only)."""
+    from src.infrastructure import SessionLocal, ReviewItem, DocumentMetadata, redis_client
+    if not SessionLocal:
+        raise HTTPException(status_code=503, detail="No database available.")
+    with SessionLocal() as session:
+        try:
+            deleted_queue = session.query(ReviewItem).delete()
+            deleted_docs = session.query(DocumentMetadata).delete()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
+    if redis_client:
+        redis_client.flushdb()
+    return {
+        "status": "ok",
+        "deleted_queue_items": deleted_queue,
+        "deleted_documents": deleted_docs,
+    }
+
+# # ── Serve the built React/Vite UI ──────────────────────────────────────────
+# _UI_DIST = os.path.join(os.path.dirname(__file__), "..", "ui", "dist")
+# if os.path.isdir(_UI_DIST):
+#     app.mount("/assets", StaticFiles(directory=os.path.join(_UI_DIST, "assets")), name="assets")
+
+#     @app.get("/", include_in_schema=False)
+#     @app.get("/{full_path:path}", include_in_schema=False)
+#     def serve_ui(full_path: str = ""):
+#         # Don't intercept /api/* routes
+#         if full_path.startswith("api/"):
+#             raise HTTPException(status_code=404)
+#         index = os.path.join(_UI_DIST, "index.html")
+#         return FileResponse(index)
 
 if __name__ == "__main__":
     import uvicorn
