@@ -226,8 +226,8 @@ tmp_output/json/*.json
 **/uploads
 
 
-# **/tmp_output/*
-# **/test_output/*
+**/tmp_output/*
+**/test_output/*
 
 test_integration.py
 fetch_doc_test.py
