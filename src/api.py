@@ -255,27 +255,29 @@ def seed_demo_data(count: int = 10):
 
     return {"seeded": len(created_ids), "item_ids": created_ids}
 
-@app.delete("/api/reset")
-def reset_all_data():
-    """Wipe all rows from review_queue and document_metadata tables (dev/test only)."""
-    from src.infrastructure import SessionLocal, ReviewItem, DocumentMetadata, redis_client
-    if not SessionLocal:
-        raise HTTPException(status_code=503, detail="No database available.")
-    with SessionLocal() as session:
-        try:
-            deleted_queue = session.query(ReviewItem).delete()
-            deleted_docs = session.query(DocumentMetadata).delete()
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
-    if redis_client:
-        redis_client.flushdb()
-    return {
-        "status": "ok",
-        "deleted_queue_items": deleted_queue,
-        "deleted_documents": deleted_docs,
-    }
+
+# This rest endpoint is for the dev to erase all testing seeds from the queue after development
+# @app.delete("/api/reset")
+# def reset_all_data():
+#     """Wipe all rows from review_queue and document_metadata tables (dev/test only)."""
+#     from src.infrastructure import SessionLocal, ReviewItem, DocumentMetadata, redis_client
+#     if not SessionLocal:
+#         raise HTTPException(status_code=503, detail="No database available.")
+#     with SessionLocal() as session:
+#         try:
+#             deleted_queue = session.query(ReviewItem).delete()
+#             deleted_docs = session.query(DocumentMetadata).delete()
+#             session.commit()
+#         except Exception as e:
+#             session.rollback()
+#             raise HTTPException(status_code=500, detail=str(e))
+#     if redis_client:
+#         redis_client.flushdb()
+#     return {
+#         "status": "ok",
+#         "deleted_queue_items": deleted_queue,
+#         "deleted_documents": deleted_docs,
+#     }
 
 # # ── Serve the built React/Vite UI ──────────────────────────────────────────
 # _UI_DIST = os.path.join(os.path.dirname(__file__), "..", "ui", "dist")

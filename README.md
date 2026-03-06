@@ -25,6 +25,9 @@ An AI-powered, production-grade document processing platform designed to extract
 
 This pipeline takes raw PDF or document payloads, runs them through an LLM-powered extraction engine (backed by [Groq](https://groq.com/)), validates the extracted financial fields, routes low-confidence results to a human review queue, and produces dual-format output (JSON + Parquet). A React-based review dashboard lets human operators audit and correct extracted data.
 
+
+![DocAI Studio - Human Review Dashboard](docs/images/dashboard-screenshot.png)
+
 Key capabilities:
 
 - **Idempotent processing** — SHA-256 content-addressed deduplication (Redis-backed, in-memory fallback)
@@ -37,6 +40,8 @@ Key capabilities:
 - **Circuit breaker + retry** — exponential backoff with full jitter; sliding-window circuit breaker for LLM/OCR APIs
 
 ---
+<!-- suggested placement -->
+![System Architecture](docs/images/architecture-diagram.png)
 
 ## Architecture
 
