@@ -27,8 +27,13 @@ export default function App() {
     const API_URL = "http://127.0.0.1:8000/api";
     const USER_ID = "reviewer_01";
     const [stats, setStats] = useState({ reviewed_today: 0, avg_time: 0, queue_length: 0 });
+    const [isLoading, setIsLoading] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     const fetchQueueAndStats = async () => {
+        setIsLoading(true);
+        setErrorMsg(null);
         try {
             const res = await fetch(`${API_URL}/queue?limit=50`);
             const data = await res.json();
@@ -43,6 +48,9 @@ export default function App() {
             });
         } catch (e) {
             console.error("Failed to fetch queue", e);
+            setErrorMsg("Failed to connect to the backend server.");
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -52,7 +60,26 @@ export default function App() {
         return () => clearInterval(interval);
     }, []);
 
+    // Global Keyboard Shortcuts
+    useEffect(() => {
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
+            if (!selectedItem) return;
+            if (e.ctrlKey && e.key === 'Enter') {
+                e.preventDefault();
+                submitAction("COMPLETED");
+            }
+            if (e.ctrlKey && e.key === 'Backspace') {
+                e.preventDefault();
+                const reason = prompt("Enter rejection reason:");
+                if (reason) submitAction("REJECTED", reason);
+            }
+        };
+        window.addEventListener('keydown', handleGlobalKeyDown);
+        return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+    }, [selectedItem, fields]);
+
     const handleSelect = async (item: QueueItem) => {
+        setErrorMsg(null);
         // Optimistic UI lock
         try {
             await fetch(`${API_URL}/queue/${item.id}/claim`, {
@@ -64,7 +91,7 @@ export default function App() {
             setFields(JSON.parse(JSON.stringify(item.fields)));
         } catch (e) {
             console.error("Failed to claim item", e);
-            alert("Could not claim item. Someone else might be reviewing it.");
+            setErrorMsg("Could not claim item. Someone else might be reviewing it.");
             fetchQueueAndStats(); // refresh
         }
     };
@@ -77,6 +104,14 @@ export default function App() {
 
     const submitAction = async (action: string, reason?: string) => {
         if (!selectedItem) return;
+
+        const isApprove = action === "COMPLETED";
+        if (isApprove && !window.confirm("Are you sure you want to approve this document and submit corrections?")) {
+            return;
+        }
+
+        setIsSubmitting(true);
+        setErrorMsg(null);
 
         const corrections: Record<string, string | number> = {};
         let modified = false;
@@ -103,7 +138,9 @@ export default function App() {
             fetchQueueAndStats();
         } catch (e) {
             console.error(e);
-            alert("Failed to submit.");
+            setErrorMsg(`Failed to submit document: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -131,17 +168,30 @@ export default function App() {
                 {/* QUEUE */}
                 <div className="queue-panel glass-panel">
                     <div className="panel-header">
-                        QUEUE ({stats.queue_length})
+                        <span id="queue-heading">QUEUE ({stats.queue_length})</span>
                     </div>
-                    <div className="queue-list">
-                        {queue.map(item => (
+                    {errorMsg && (
+                        <div style={{ padding: '8px 16px', background: 'var(--accent-red)', color: 'white', fontSize: '0.8rem' }}>
+                            {errorMsg}
+                        </div>
+                    )}
+                    <div className="queue-list" role="listbox" aria-labelledby="queue-heading">
+                        {isLoading && queue.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                <p>Loading queue data...</p>
+                            </div>
+                        ) : queue.map(item => (
                             <div
                                 key={item.id}
+                                role="option"
+                                aria-selected={selectedItem?.id === item.id}
+                                tabIndex={0}
                                 className={`queue-item ${selectedItem?.id === item.id ? 'active' : ''}`}
                                 onClick={() => handleSelect(item)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleSelect(item); }}
                             >
                                 <div>
-                                    <span className={`status-dot ${item.status}`}></span>
+                                    <span className={`status-dot ${item.status}`} aria-label={`Priority: ${item.status}`}></span>
                                     <span className="item-id">{item.documentId}</span>
                                 </div>
                                 <div className="item-sla">
@@ -179,12 +229,16 @@ export default function App() {
                     </div>
                     <div className="preview-content">
                         {selectedItem ? (
-                            <div className="animated-entry" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+                            <div className="animated-entry" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }} aria-live="polite">
                                 <FileText size={48} opacity={0.5} />
                                 <p>[Document Image/PDF Viewer]</p>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>ID: {selectedItem.documentId}</p>
                             </div>
                         ) : (
-                            <p>Select a document from the queue to start reviewing.</p>
+                            <div style={{ textAlign: 'center' }} aria-live="polite">
+                                <p>Select a document from the queue to start reviewing.</p>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px' }}>Shortcuts: Ctrl+Enter (Approve), Ctrl+Backspace (Reject)</p>
+                            </div>
                         )}
                     </div>
                 </div>
@@ -207,6 +261,7 @@ export default function App() {
                                             type="text"
                                             className="field-input"
                                             value={field.value}
+                                            aria-label={field.key}
                                             onChange={(e) => handleFieldChange(idx, e.target.value)}
                                         />
                                         <span className="bracket">]</span>
@@ -230,9 +285,15 @@ export default function App() {
                     </div>
 
                     <div className="action-bar" style={{ marginTop: '32px' }}>
-                        <button className="btn-approve" onClick={handleApprove}>[Approve]</button>
-                        <button className="btn-correct" onClick={handleCorrect}>[Correct]</button>
-                        <button className="btn-reject" onClick={handleReject}>[Reject]</button>
+                        <button className="btn-approve" onClick={handleApprove} disabled={isSubmitting} aria-label="Approve Document">
+                            {isSubmitting ? '[Submitting...]' : '[Approve]'}
+                        </button>
+                        <button className="btn-correct" onClick={handleCorrect} disabled={isSubmitting} aria-label="Correct Document">
+                            [Correct]
+                        </button>
+                        <button className="btn-reject" onClick={handleReject} disabled={isSubmitting} aria-label="Reject Document">
+                            [Reject]
+                        </button>
                     </div>
                 </div>
             </div>
