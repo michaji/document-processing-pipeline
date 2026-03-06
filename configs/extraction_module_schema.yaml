@@ -1,0 +1,181 @@
+version: "1.0"
+description: >
+  Extraction module configuration for a financial document processing pipeline.
+  Supports invoices, contracts, receipts, and purchase orders.
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+schema:
+  document:
+    id:
+      type: string
+      required: true
+    tenant_id:
+      type: string
+      required: true
+    type:
+      type: enum
+      values: [invoice, contract, receipt, po]
+      required: true
+    schema_version:
+      type: string
+      default: "1.0"
+      description: "Used for backward compatibility checks."
+
+  fields:
+    - name: invoice_number
+      type: string
+      required: true
+      validation:
+        pattern: "^[A-Z0-9-]{3,30}$"
+      confidence_threshold: 0.85
+      idempotency_key: true
+      preserve_human_correction: true
+
+    - name: vendor_name
+      type: string
+      required: true
+      validation:
+        min_length: 2
+        max_length: 200
+      confidence_threshold: 0.80
+      preserve_human_correction: true
+
+    - name: invoice_date
+      type: date           # ISO-8601: YYYY-MM-DD
+      required: true
+      confidence_threshold: 0.85
+      preserve_human_correction: true
+
+    - name: due_date
+      type: date
+      required: false
+      confidence_threshold: 0.80
+      preserve_human_correction: true
+
+    - name: currency
+      type: enum
+      values: [USD, EUR, GBP, CHF, CAD, AUD]
+      required: true
+      confidence_threshold: 0.95
+      preserve_human_correction: false   # auto-detected reliably
+
+    - name: total_amount
+      type: float
+      required: true
+      validation:
+        min_value: 0.0
+        max_decimal_places: 2
+      confidence_threshold: 0.90
+      preserve_human_correction: true
+
+    - name: tax_amount
+      type: float
+      required: false
+      validation:
+        min_value: 0.0
+        max_decimal_places: 2
+        must_be_lte: total_amount    # Cross-field rule
+      confidence_threshold: 0.85
+      preserve_human_correction: true
+
+    - name: subtotal_amount
+      type: float
+      required: false
+      confidence_threshold: 0.85
+      preserve_human_correction: true
+
+    - name: line_items
+      type: array
+      required: false
+      confidence_threshold: 0.80
+      preserve_human_correction: true
+      items:
+        type: object
+        schema:
+          description:
+            type: string
+            required: true
+          quantity:
+            type: float
+            required: true
+            validation:
+              min_value: 0.0
+          unit_price:
+            type: float
+            required: true
+            validation:
+              min_value: 0.0
+          total:
+            type: float
+            required: true
+            validation:
+              min_value: 0.0
+
+# ── Idempotency ───────────────────────────────────────────────────────────────
+settings:
+  idempotency:
+    enabled: true
+    key_components: [document_id, content_hash]  # SHA-256(document_id + SHA-256(content))
+    hash_algorithm: sha256
+    ttl_days: 90
+    on_duplicate: return_cached                  # Options: return_cached | error | reprocess
+
+  # ── Field preservation ──────────────────────────────────────────────────────
+  field_preservation:
+    enabled: true
+    source_priority:
+      - HUMAN          # Highest — never overwritten
+      - AI             # Set only if no HUMAN correction exists
+    lock_mechanism: source_metadata  # Each field stores {value, source, confidence}
+
+  # ── Retry & resilience ──────────────────────────────────────────────────────
+  retry:
+    max_attempts: 3
+    strategy: exponential_backoff_with_full_jitter
+    base_delay_seconds: 1.0
+    max_delay_seconds: 30.0
+    retryable_errors:
+      - ConnectionError
+      - TimeoutError
+      - HTTP_429
+      - HTTP_5xx
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold_percent: 15   # Opens after 15% failure in window
+    window_size: 20                  # Rolling window of last 20 calls
+    recovery_timeout_seconds: 30
+
+  # ── Output formats ──────────────────────────────────────────────────────────
+  output:
+    schema_version_tag: true      # Embed schema_version in every output record
+    formats:
+      - type: json
+        path: "output/json/"
+        encoding: utf-8
+        indent: 2
+      - type: parquet
+        path: "output/parquet/"
+        compression: snappy
+        engine: pyarrow
+
+  # ── Data quality ────────────────────────────────────────────────────────────
+  quality:
+    emit_metrics: true
+    metrics:
+      - avg_confidence
+      - min_confidence
+      - max_confidence
+      - fields_below_threshold
+      - quality_score
+
+  # ── Review routing ──────────────────────────────────────────────────────────
+  review:
+    enabled: true
+    trigger_when:
+      - any_field_confidence_below: 0.80
+      - validation_errors_present: true
+    sla_hours_by_priority:
+      critical: 2
+      high: 4
+      normal: 8

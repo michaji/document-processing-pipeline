@@ -1,0 +1,66 @@
+{
+  "document_id": "doc-test-real-1",
+  "document_type": "invoice",
+  "tenant_id": "default",
+  "schema_version": "1.0",
+  "processed_at": "2026-03-06T12:31:31.569610Z",
+  "content_hash": "3f756eef90914369e210e34421058642d588ccec6e1b4705239f689afd9c3beb",
+  "needs_review": false,
+  "validation_errors": [],
+  "quality_metrics": {
+    "avg_confidence": 1.0,
+    "min_confidence": 1.0,
+    "max_confidence": 1.0,
+    "total_fields": 4,
+    "fields_below_threshold": 0,
+    "quality_score": 1.0
+  },
+  "audit_trail": [
+    {
+      "timestamp": "2026-03-06T12:31:22.781161Z",
+      "event": "status_change",
+      "details": {
+        "to": "QUEUED"
+      }
+    },
+    {
+      "timestamp": "2026-03-06T12:31:22.781161Z",
+      "event": "status_change",
+      "details": {
+        "to": "PROCESSING"
+      }
+    },
+    {
+      "timestamp": "2026-03-06T12:31:31.569610Z",
+      "event": "extraction_complete",
+      "details": {
+        "fields_extracted": [
+          "invoice_number",
+          "invoice_number_confidence",
+          "invoice_number_source",
+          "vendor_name",
+          "vendor_name_confidence",
+          "vendor_name_source",
+          "invoice_date",
+          "invoice_date_confidence",
+          "invoice_date_source",
+          "total_amount",
+          "total_amount_confidence",
+          "total_amount_source"
+        ]
+      }
+    }
+  ],
+  "invoice_number": "INV-2023-084A",
+  "invoice_number_confidence": 1.0,
+  "invoice_number_source": "AI",
+  "vendor_name": "Acme Corp",
+  "vendor_name_confidence": 1.0,
+  "vendor_name_source": "AI",
+  "invoice_date": "2023-10-24",
+  "invoice_date_confidence": 1.0,
+  "invoice_date_source": "AI",
+  "total_amount": 1674.0,
+  "total_amount_confidence": 1.0,
+  "total_amount_source": "AI"
+}

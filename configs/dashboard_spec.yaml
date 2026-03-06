@@ -1,0 +1,28 @@
+dashboard:
+  title: "Document Processing Pipeline Health"
+  refresh_rate: "30s"
+  panels:
+    - title: "Processing Latency (P95)"
+      type: time_series
+      query: "histogram_quantile(0.95, sum(rate(document_processing_duration_seconds_bucket[5m])) by (le))"
+      alert_threshold: 30
+      
+    - title: "Throughput (Docs/Hour)"
+      type: gauge
+      query: "sum(rate(documents_processed_total[1h])) * 3600"
+      alert_threshold: 4500
+      
+    - title: "System Error Rate"
+      type: time_series
+      query: "sum(rate(document_processing_errors_total[5m])) / sum(rate(documents_processed_total[5m])) * 100"
+      alert_threshold: 1.0
+      
+    - title: "Review Queue Depth"
+      type: stat
+      query: "review_queue_items_pending"
+      alert_threshold: 500
+      
+    - title: "SLA Beach Rate"
+      type: gauge
+      query: "sum(rate(sla_breaches_total[1h])) / sum(rate(documents_processed_total[1h])) * 100"
+      alert_threshold: 0.1

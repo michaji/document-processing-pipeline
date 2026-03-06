@@ -136,6 +136,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env*
 .envrc
 .venv
 env/
@@ -205,3 +206,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+**/node_modules/
+
+
+# Ignore all .parquet and .json files in output directory
+output/parquet/*.parquet
+output/json/*.json

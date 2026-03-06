@@ -1,0 +1,36 @@
+version: "1.0"
+slas:
+  - metric: p95_latency_seconds
+    threshold: 30
+    operator: less_than
+    window: "5m"
+    severity: Critical
+    description: "P95 latency for single document processing must be under 30 seconds."
+
+  - metric: docs_per_hour
+    threshold: 4500
+    operator: greater_than
+    window: "15m"
+    severity: Warning
+    description: "System must process at least 4500 documents per hour during peak."
+
+  - metric: error_rate_percent
+    threshold: 1.0
+    operator: less_than
+    window: "5m"
+    severity: Critical
+    description: "Error rate must remain below 1%."
+
+  - metric: review_queue_depth
+    threshold: 500
+    operator: less_than
+    window: "5m"
+    severity: Warning
+    description: "Manual review queue must not backlog more than 500 items."
+
+  - metric: sla_breach_percent
+    threshold: 0.1
+    operator: less_than
+    window: "1h"
+    severity: Critical
+    description: "Less than 0.1% of items can breach their overall processing SLA."
