@@ -1,101 +1,16 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Review Dashboard | Document Process Pipeline</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="/src/style.css">
-  </head>
-  <body>
-    <div id="app">
-      <nav class="navbar">
-        <div class="nav-brand">
-          <i data-lucide="layers"></i>
-          <h1>DocAI Studio <span class="badge">Human Review</span></h1>
-        </div>
-        <div class="nav-actions">
-          <button class="icon-btn"><i data-lucide="settings"></i></button>
-          <div class="avatar"><i data-lucide="user"></i></div>
-        </div>
-      </nav>
 
-      <main class="dashboard-layout">
-        <!-- Sidebar: Stats + Queue -->
-        <aside class="sidebar">
-          <section class="panel stats-panel">
-            <h2><i data-lucide="bar-chart-2"></i> My Stats</h2>
-            <div class="stats-grid">
-              <div class="stat-box">
-                <span class="stat-label">Today</span>
-                <span class="stat-val" id="stat-today">23</span>
-              </div>
-              <div class="stat-box">
-                <span class="stat-label">Avg Time</span>
-                <span class="stat-val" id="stat-avg">45s</span>
-              </div>
-              <div class="stat-box">
-                <span class="stat-label">Queue</span>
-                <span class="stat-val" id="stat-queue">47</span>
-              </div>
-              <div class="stat-box">
-                <span class="stat-label">SLA</span>
-                <span class="stat-val success" id="stat-sla">99%</span>
-              </div>
-            </div>
-          </section>
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Review Dashboard</title>
+</head>
 
-          <section class="panel queue-panel">
-            <div class="panel-header">
-              <h2><i data-lucide="list"></i> Queue</h2>
-              <div class="queue-actions">
-                <button class="icon-btn-small" aria-label="Sort"><i data-lucide="arrow-up-down"></i></button>
-                <button class="icon-btn-small" aria-label="Filter"><i data-lucide="filter"></i></button>
-              </div>
-            </div>
-            <ul class="queue-list" id="queue-list">
-              <!-- Rendered via JS -->
-            </ul>
-          </section>
-        </aside>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
 
-        <!-- Main review area -->
-        <section class="panel review-area">
-          <div class="document-viewer">
-            <div class="viewer-header">
-              <h3><i data-lucide="file-text"></i> Document Preview</h3>
-            </div>
-            <div class="viewer-content">
-              <div class="pdf-placeholder">
-                <i data-lucide="file-question" class="placeholder-icon"></i>
-                <p>Select a document from the queue to start reviewing.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="extraction-panel">
-            <div class="panel-header">
-              <h3><i data-lucide="check-square"></i> Extracted Fields</h3>
-            </div>
-            <div class="fields-list" id="fields-list">
-              <!-- Rendered via JS -->
-            </div>
-            
-            <div class="action-bar" id="action-bar" style="display: none;">
-              <button class="btn btn-secondary" id="btn-reject"><i data-lucide="x-circle"></i> Reject (R)</button>
-              <button class="btn btn-primary" id="btn-process"><i data-lucide="check-circle"></i> Confirm changes (Enter)</button>
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
-    
-    <script type="module" src="/src/main.js"></script>
-    <script>
-      lucide.createIcons();
-    </script>
-  </body>
 </html>
