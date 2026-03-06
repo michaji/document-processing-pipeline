@@ -1,12 +1,26 @@
-from fastapi import FastAPI, HTTPException, Body
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
+from src.infrastructure import init_db
+from src.monitoring import SLAMonitor
 from src.review_queue import ReviewQueueManager
 
-app = FastAPI(title="Document Processing API - Review Dashboard")
+sla_monitor = SLAMonitor()
+queue_manager = ReviewQueueManager()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize DB tables on startup, then yield."""
+    init_db()
+    yield
+
+
+app = FastAPI(title="Document Processing API - Review Dashboard", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,8 +29,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-queue_manager = ReviewQueueManager()
 
 class ClaimRequest(BaseModel):
     user_id: str
@@ -40,9 +52,9 @@ def get_queue(limit: int = 50, offset: int = 0):
         elif item["priority"] >= 50:
             priority_cat = "warning"
             
-        now = datetime.now()
-        # Parse ISO SLA
-        sla_dt = datetime.fromisoformat(item["sla_deadline"].replace("Z", "+00:00")).replace(tzinfo=None)
+        # Both are naive UTC datetimes — use UTC now to avoid timezone drift
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        sla_dt = datetime.fromisoformat(item["sla_deadline"].rstrip("Z"))
         hours_remaining = int((sla_dt - now).total_seconds() / 3600)
         
         # Build UI friendly fields array
@@ -101,7 +113,70 @@ def submit_review(item_id: str, req: SubmitReviewRequest):
 
 @app.get("/api/stats")
 def get_stats():
-    return queue_manager.get_queue_stats()
+    stats = queue_manager.get_queue_stats()
+    if stats:
+        pending = stats.get("pending_items", 0)
+        breached = stats.get("sla_breached", 0)
+        sla_monitor.record_metrics({
+            "review_queue_depth": pending,
+            "sla_breach_percent": round(breached / max(pending, 1) * 100, 2),
+        })
+    return stats
+
+
+@app.get("/api/health")
+def get_health():
+    """Returns SLA monitor system status and active alert count."""
+    return sla_monitor.get_status()
+
+
+@app.post("/api/seed")
+def seed_demo_data(count: int = 10):
+    """Seed the review queue with realistic sample documents for demo/testing."""
+    import time as _time
+    vendors = ["Acme Corp", "TechStart Inc", "Global Supply Co", "Premier Services", "Digital Solutions"]
+    confidences = [0.75, 0.92, 0.65, 0.88, 0.71, 0.95, 0.58, 0.82, 0.99, 0.70]
+    priorities = [90, 70, 50, 30, 80, 60, 40, 85, 55, 45]
+    sla_hours_list = [2, 8, 24, 48, 4, 12, 36, 1, 6, 18]
+    # Use a short epoch-based suffix so repeated seed calls always produce new doc IDs
+    epoch_tag = str(int(_time.time()))[-6:]
+
+    created_ids = []
+    for i in range(count):
+        doc_id = f"INV-{epoch_tag}-{i + 1:03d}"
+        vendor_conf = confidences[i % len(confidences)]
+        total_conf = confidences[(i + 3) % len(confidences)]
+        extracted_data = {
+            "invoice_number": doc_id,
+            "invoice_number_confidence": 0.95,
+            "invoice_number_source": "AI",
+            "vendor_name": vendors[i % len(vendors)],
+            "vendor_name_confidence": vendor_conf,
+            "vendor_name_source": "AI",
+            "invoice_date": "2026-03-01",
+            "invoice_date_confidence": 0.92,
+            "invoice_date_source": "AI",
+            "total_amount": round(500 + i * 123.45, 2),
+            "total_amount_confidence": total_conf,
+            "total_amount_source": "AI",
+            "tax_amount": round(50 + i * 12.34, 2),
+            "tax_amount_confidence": 0.87,
+            "tax_amount_source": "AI",
+            "currency": "USD",
+            "currency_confidence": 0.99,
+            "currency_source": "AI",
+        }
+        item_id = queue_manager.add_to_queue(
+            document_id=doc_id,
+            extracted_data=extracted_data,
+            priority=priorities[i % len(priorities)],
+            sla_hours=sla_hours_list[i % len(sla_hours_list)],
+        )
+        if item_id:
+            created_ids.append(item_id)
+
+    return {"seeded": len(created_ids), "item_ids": created_ids}
+
 
 if __name__ == "__main__":
     import uvicorn

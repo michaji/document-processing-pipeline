@@ -25,7 +25,7 @@ import random
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed, Future, wait, FIRST_EXCEPTION
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future, wait, FIRST_EXCEPTION, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
 
 from src.infrastructure import redis_client
@@ -651,7 +651,18 @@ class WorkflowExecutor:
                 if time.monotonic() > deadline:
                     raise WorkflowTimeoutError("Deadline exceeded mid-step.")
                 try:
-                    output = step.func(**kwargs)
+                    if step.timeout_seconds is not None:
+                        # Per-step timeout: run in a nested thread and wait with timeout
+                        with ThreadPoolExecutor(max_workers=1) as _local_pool:
+                            _step_future = _local_pool.submit(step.func, **kwargs)
+                            try:
+                                output = _step_future.result(timeout=step.timeout_seconds)
+                            except FutureTimeoutError:
+                                raise WorkflowTimeoutError(
+                                    f"Step '{step.name}' exceeded {step.timeout_seconds}s per-step timeout."
+                                )
+                    else:
+                        output = step.func(**kwargs)
                     result.output = output
                     result.status = StepStatus.COMPLETED
                     result.attempts = attempt + 1
@@ -805,11 +816,27 @@ def build_invoice_pipeline(extraction_module=None) -> DAGWorkflow:
         logger.info("Publishing document %s to downstream sinks.", doc_id)
         return {"published": True, "document_id": doc_id}
 
-    def publish_for_review(enrich: Dict[str, Any]) -> Dict[str, str]:
-        """Route to human review queue instead of direct publish."""
+    def publish_for_review(enrich: Dict[str, Any]) -> Dict[str, Any]:
+        """Route document to human review queue and register it in the DB."""
+        from src.review_queue import ReviewQueueManager
         doc_id = enrich.get("document_id", "unknown")
         logger.info("Document %s routed to REVIEW queue.", doc_id)
-        return {"published": False, "review_queued": True, "document_id": doc_id}
+
+        _review_queue = ReviewQueueManager()
+        quality_metrics = enrich.get("quality_metrics", {})
+        quality_score = quality_metrics.get("quality_score", 1.0) if isinstance(quality_metrics, dict) else 1.0
+        priority = 80 if quality_score < 0.7 else 50
+
+        excluded_keys = {"audit_trail", "quality_metrics", "validation_errors"}
+        extracted_data = {k: v for k, v in enrich.items() if k not in excluded_keys}
+
+        item_id = _review_queue.add_to_queue(
+            document_id=doc_id,
+            extracted_data=extracted_data,
+            priority=priority,
+        )
+        logger.info("Review queue item created: %s for document %s", item_id, doc_id)
+        return {"published": False, "review_queued": True, "document_id": doc_id, "review_item_id": item_id}
 
     # ── Conditions ────────────────────────────────────────────────────────────
 

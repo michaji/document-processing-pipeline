@@ -101,10 +101,11 @@ class CircuitBreaker:
 # Thread-safe Idempotency Store (Redis with fallback to in-memory)
 # ---------------------------------------------------------------------------
 class IdempotencyStore:
-    def __init__(self):
+    def __init__(self, force_in_memory: bool = False):
         self._store: Dict[str, Dict] = {}
         self._lock = threading.Lock()
-        self.redis = redis_client
+        # force_in_memory=True in test/mock mode to avoid Redis cross-test contamination
+        self.redis = None if force_in_memory else redis_client
         self.ttl = int(os.getenv("REDIS_TTL_SECONDS", "7776000"))
 
     def get(self, key: str) -> Optional[Dict]:
@@ -130,6 +131,22 @@ class IdempotencyStore:
     def get_output(self, key: str) -> Optional[Dict]:
         record = self.get(key)
         return record.get("output") if record else None
+
+    def mark_processing(self, key: str, record: Dict) -> bool:
+        """
+        Atomically claim a key for PROCESSING. Returns True if claimed, False if already held.
+        Redis: uses SET NX (set-if-not-exists) to prevent concurrent duplicate processing.
+        In-memory: uses the lock to check-and-set atomically.
+        """
+        if self.redis:
+            result = self.redis.set(key, json.dumps(record), nx=True, ex=self.ttl)
+            return bool(result)
+        with self._lock:
+            existing = self._store.get(key)
+            if existing and existing.get("status") == ProcessingStatus.PROCESSING:
+                return False
+            self._store[key] = record
+            return True
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +207,8 @@ class ExtractionModule:
         self.confidence_review_threshold = confidence_review_threshold
         self.max_retries = max_retries
         self.use_mock_llm = use_mock_llm
-        self.idempotency_store = IdempotencyStore()
+        # In mock/test mode use in-memory idempotency to avoid Redis cross-test contamination
+        self.idempotency_store = IdempotencyStore(force_in_memory=use_mock_llm)
         self.circuit_breaker = CircuitBreaker()
         
         if not self.use_mock_llm:
@@ -225,21 +243,24 @@ class ExtractionModule:
         manual_corrections = manual_corrections or {}
         audit: List[Dict] = []
 
-        # ---- Idempotency check -----------------------------------------------
+        # ---- Idempotency check (fast path for completed docs) ----------------
         existing = self.idempotency_store.get(ido_key)
-        if existing:
-            if existing["status"] == ProcessingStatus.COMPLETED:
-                logger.info("Idempotent hit for %s — returning cached result.", document_id)
-                return ProcessingStatus.COMPLETED, existing["output"]
-            elif existing["status"] == ProcessingStatus.PROCESSING:
-                raise RuntimeError(f"Document {document_id} is already being processed — concurrent duplicate rejected.")
+        if existing and existing["status"] == ProcessingStatus.COMPLETED:
+            logger.info("Idempotent hit for %s — returning cached result.", document_id)
+            return ProcessingStatus.COMPLETED, existing["output"]
 
-        # ---- Mark QUEUED then PROCESSING -------------------------------------
+        # ---- Atomically claim PROCESSING via SET NX (prevents races) ---------
         audit.append(_make_audit_event("status_change", {"to": ProcessingStatus.QUEUED}))
-        self.idempotency_store.save(ido_key, {"status": ProcessingStatus.QUEUED, "audit": audit})
-
         audit.append(_make_audit_event("status_change", {"to": ProcessingStatus.PROCESSING}))
-        self.idempotency_store.save(ido_key, {"status": ProcessingStatus.PROCESSING, "audit": audit})
+        claimed = self.idempotency_store.mark_processing(
+            ido_key, {"status": ProcessingStatus.PROCESSING, "audit": audit}
+        )
+        if not claimed:
+            existing = self.idempotency_store.get(ido_key)
+            if existing and existing["status"] == ProcessingStatus.PROCESSING:
+                raise RuntimeError(
+                    f"Document {document_id} is already being processed — concurrent duplicate rejected."
+                )
 
         try:
             # ---- LLM extraction (with retry + circuit breaker) ---------------
@@ -338,20 +359,24 @@ class ExtractionModule:
         
         # Real LLM call using Groq API
         prompt = f"""
-Extract information from the provided {document_type} content.
-You must output ONLY a valid JSON object matching this exact flat structure with no additional properties.
-
-For every field extracted, provide two supplementary fields:
-- <field>_confidence: float between 0.0 and 1.0 representing your confidence.
+Extract information from the provided {document_type} document.
+Output ONLY a valid JSON object. For every field extracted, include:
+- <field>_confidence: float 0.0–1.0 representing your extraction confidence
 - <field>_source: string "AI"
 
-Required fields (plus their _confidence and _source variants):
-- invoice_number (string)
-- vendor_name (string)
-- invoice_date (YYYY-MM-DD string)
-- total_amount (float)
+Extract ALL of the following fields where present in the document (omit fields
+that are genuinely absent):
+- invoice_number (string): unique invoice identifier
+- vendor_name (string): name of the issuing vendor/company
+- invoice_date (string, YYYY-MM-DD): date the invoice was issued
+- due_date (string, YYYY-MM-DD): payment due date
+- total_amount (float): total amount including tax
+- subtotal_amount (float): subtotal before tax
+- tax_amount (float): tax/VAT amount
+- currency (string, ISO 4217, e.g. USD): invoice currency
+- line_items (array): each element has description, quantity, unit_price, total
 
-Content:
+Document content:
 {payload.decode('utf-8', errors='ignore')[:4000]}
 """
         response = self.groq_client.chat.completions.create(
@@ -418,20 +443,38 @@ Content:
         }
 
     def _write_outputs(self, document_id: str, output: Dict):
-        """Write extraction output to Dual formats: JSON and Parquet."""
-        json_path = os.path.join(self.output_dir, "json", f"{document_id}.json")
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(output, f, indent=2)
+        """Write extraction output to JSON and Parquet atomically via temp-file + os.replace."""
+        json_dir = os.path.join(self.output_dir, "json")
+        json_path = os.path.join(json_dir, f"{document_id}.json")
+        tmp_json = json_path + ".tmp"
+        try:
+            with open(tmp_json, 'w', encoding='utf-8') as f:
+                json.dump(output, f, indent=2)
+            os.replace(tmp_json, json_path)
+        except Exception:
+            try:
+                os.unlink(tmp_json)
+            except OSError:
+                pass
+            raise
 
-        parquet_path = os.path.join(self.output_dir, "parquet", f"{document_id}.parquet")
-        # Flatten audit trail / complex types for Pandas if needed
+        parquet_dir = os.path.join(self.output_dir, "parquet")
+        parquet_path = os.path.join(parquet_dir, f"{document_id}.parquet")
         flat_output = {**output}
-        flat_output["validation_errors"] = json.dumps(flat_output["validation_errors"])
-        flat_output["quality_metrics"] = json.dumps(flat_output["quality_metrics"])
-        flat_output["audit_trail"] = json.dumps(flat_output["audit_trail"])
-
+        flat_output["validation_errors"] = json.dumps(flat_output.get("validation_errors", []))
+        flat_output["quality_metrics"] = json.dumps(flat_output.get("quality_metrics", {}))
+        flat_output["audit_trail"] = json.dumps(flat_output.get("audit_trail", []))
         df = pd.DataFrame([flat_output])
-        df.to_parquet(parquet_path, engine="pyarrow", compression="snappy", index=False)
+        tmp_parquet = parquet_path + ".tmp"
+        try:
+            df.to_parquet(tmp_parquet, engine="pyarrow", compression="snappy", index=False)
+            os.replace(tmp_parquet, parquet_path)
+        except Exception:
+            try:
+                os.unlink(tmp_parquet)
+            except OSError:
+                pass
+            raise
 
     def _save_metadata(self, output: Dict, status: ProcessingStatus):
         """Save document metadata to Postgres if connected."""
