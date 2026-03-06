@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, CheckCircle, AlertTriangle, Clock, Settings, User, BarChart2, Check, AlertCircle } from 'lucide-react';
+import {
+    FileText, CheckCircle, AlertTriangle, Clock,
+    Settings, User, BarChart2, Check, AlertCircle,
+    Layers, Filter, ArrowDownUp
+} from 'lucide-react';
 import './index.css';
 
 type QueueItem = {
@@ -22,11 +26,12 @@ export default function App() {
     const [queue, setQueue] = useState<QueueItem[]>([]);
     const [selectedItem, setSelectedItem] = useState<QueueItem | null>(null);
     const [fields, setFields] = useState<ExtractedField[]>([]);
+    const [successState, setSuccessState] = useState(false);
 
     // Stats
     const API_URL = "http://127.0.0.1:8000/api";
     const USER_ID = "reviewer_01";
-    const [stats, setStats] = useState({ reviewed_today: 0, avg_time: 0, queue_length: 0 });
+    const [stats, setStats] = useState({ reviewed_today: 0, avg_time: 0, queue_length: 0, sla: 99 });
     const [isLoading, setIsLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -41,14 +46,21 @@ export default function App() {
 
             const statsRes = await fetch(`${API_URL}/stats`);
             const statsData = await statsRes.json();
+
+            // Calculate a mock SLA percentage if DB isn't returning it natively yet
+            const pending = statsData.pending_items || data.length;
+            const breached = statsData.sla_breached || 0;
+            const slaPercent = pending > 0 ? Math.max(0, 100 - (breached / pending * 100)) : 100;
+
             setStats({
                 reviewed_today: statsData.reviewed_today || 0,
                 avg_time: statsData.avg_review_time_seconds || 0,
-                queue_length: statsData.pending_items || data.length
+                queue_length: pending,
+                sla: Math.round(slaPercent)
             });
         } catch (e) {
             console.error("Failed to fetch queue", e);
-            setErrorMsg("Failed to connect to the backend server.");
+            setErrorMsg("Failed to connect to backend server.");
         } finally {
             setIsLoading(false);
         }
@@ -80,7 +92,7 @@ export default function App() {
 
     const handleSelect = async (item: QueueItem) => {
         setErrorMsg(null);
-        // Optimistic UI lock
+        setSuccessState(false);
         try {
             await fetch(`${API_URL}/queue/${item.id}/claim`, {
                 method: 'POST',
@@ -92,7 +104,7 @@ export default function App() {
         } catch (e) {
             console.error("Failed to claim item", e);
             setErrorMsg("Could not claim item. Someone else might be reviewing it.");
-            fetchQueueAndStats(); // refresh
+            fetchQueueAndStats();
         }
     };
 
@@ -135,10 +147,14 @@ export default function App() {
                 })
             });
             setSelectedItem(null);
+            setSuccessState(true);
             fetchQueueAndStats();
+
+            // Auto hide success state after 3s
+            setTimeout(() => setSuccessState(false), 3000);
         } catch (e) {
             console.error(e);
-            setErrorMsg(`Failed to submit document: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            setErrorMsg(`Failed to submit: ${e instanceof Error ? e.message : 'Unknown error'}`);
         } finally {
             setIsSubmitting(false);
         }
@@ -149,36 +165,70 @@ export default function App() {
         const reason = prompt("Enter rejection reason:");
         if (reason) submitAction("REJECTED", reason);
     };
-    const handleCorrect = () => submitAction("COMPLETED");
 
     return (
         <div className="layout">
             {/* HEADER */}
-            <header className="glass-panel">
-                <div className="header-title">Review Dashboard</div>
+            <header>
+                <div className="header-left">
+                    <Layers className="logo-icon" size={24} />
+                    <div className="header-title">DocAI Studio</div>
+                    <div className="badge-pill">Human Review</div>
+                </div>
                 <div className="header-nav">
-                    <button className="nav-btn"><BarChart2 size={18} /> Stats</button>
-                    <button className="nav-btn"><Settings size={18} /> Settings</button>
-                    <button className="nav-btn"><User size={18} /> User</button>
+                    <button className="nav-btn" aria-label="Settings"><Settings size={20} /></button>
+                    <button className="nav-btn" aria-label="User Profile"><User size={20} /></button>
                 </div>
             </header>
 
             {/* SIDEBAR */}
             <div className="sidebar">
+
+                {/* MY STATS (Moved to top based on inspiration) */}
+                <div className="stats-panel glass-panel">
+                    <div className="panel-header">
+                        <BarChart2 size={16} /> My Stats
+                    </div>
+                    <div className="stats-content">
+                        <div className="stat-card">
+                            <span className="stat-label">Today</span>
+                            <span className="stat-value">{stats.reviewed_today}</span>
+                        </div>
+                        <div className="stat-card">
+                            <span className="stat-label">Avg Time</span>
+                            <span className="stat-value">{stats.avg_time}s</span>
+                        </div>
+                        <div className="stat-card">
+                            <span className="stat-label">Queue</span>
+                            <span className="stat-value">{stats.queue_length}</span>
+                        </div>
+                        <div className="stat-card">
+                            <span className="stat-label">SLA</span>
+                            <span className={`stat-value ${stats.sla >= 95 ? 'green' : ''}`}>{stats.sla}%</span>
+                        </div>
+                    </div>
+                </div>
+
                 {/* QUEUE */}
                 <div className="queue-panel glass-panel">
                     <div className="panel-header">
-                        <span id="queue-heading">QUEUE ({stats.queue_length})</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Filter size={16} /> Queue
+                        </div>
+                        <div className="header-actions">
+                            <ArrowDownUp size={16} />
+                            <Filter size={16} />
+                        </div>
                     </div>
                     {errorMsg && (
-                        <div style={{ padding: '8px 16px', background: 'var(--accent-red)', color: 'white', fontSize: '0.8rem' }}>
-                            {errorMsg}
+                        <div className="error-banner" role="alert">
+                            <AlertCircle size={16} /> {errorMsg}
                         </div>
                     )}
-                    <div className="queue-list" role="listbox" aria-labelledby="queue-heading">
+                    <div className="queue-list" role="listbox" aria-label="Document Queue">
                         {isLoading && queue.length === 0 ? (
                             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                                <p>Loading queue data...</p>
+                                <p>Loading queue...</p>
                             </div>
                         ) : queue.map(item => (
                             <div
@@ -190,113 +240,107 @@ export default function App() {
                                 onClick={() => handleSelect(item)}
                                 onKeyDown={(e) => { if (e.key === 'Enter') handleSelect(item); }}
                             >
-                                <div>
-                                    <span className={`status-dot ${item.status}`} aria-label={`Priority: ${item.status}`}></span>
+                                <div className="item-info">
                                     <span className="item-id">{item.documentId}</span>
+                                    <span className="item-type"><FileText size={12} /> Invoice</span>
                                 </div>
-                                <div className="item-sla">
-                                    [{item.slaHoursRemaining}h]
+                                <div className={`sla-badge ${item.status}`} aria-label={`SLA: ${item.slaHoursRemaining} hours remaining. Priority: ${item.status}`}>
+                                    <Clock size={12} /> {item.slaHoursRemaining}h
                                 </div>
                             </div>
                         ))}
-                        {queue.length === 0 && (
+                        {queue.length === 0 && !isLoading && (
                             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
                                 <CheckCircle size={32} style={{ opacity: 0.5, marginBottom: '1rem' }} />
-                                <p>All clear!</p>
+                                <p>Queue is empty.</p>
                             </div>
                         )}
-                    </div>
-                </div>
-
-                {/* MY STATS */}
-                <div className="stats-panel glass-panel">
-                    <div className="panel-header" style={{ borderBottom: 'none', paddingBottom: 8 }}>
-                        MY STATS
-                    </div>
-                    <div className="stats-content">
-                        <div className="stat-line">Today: {stats.reviewed_today}</div>
-                        <div className="stat-line">Avg: {stats.avg_time}s</div>
                     </div>
                 </div>
             </div>
 
             {/* WORKSPACE */}
             <div className="workspace">
-                {/* PREVIEW */}
+
+                {/* PREVIEW PANEL */}
                 <div className="preview-panel glass-panel">
-                    <div className="panel-header" style={{ borderBottom: '1px solid var(--border-color)' }}>
-                        DOCUMENT PREVIEW
+                    <div className="panel-header">
+                        <FileText size={16} /> Document Preview
                     </div>
                     <div className="preview-content">
-                        {selectedItem ? (
-                            <div className="animated-entry" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }} aria-live="polite">
-                                <FileText size={48} opacity={0.5} />
-                                <p>[Document Image/PDF Viewer]</p>
-                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>ID: {selectedItem.documentId}</p>
+                        {successState ? (
+                            <div className="success-state" aria-live="polite">
+                                <CheckCircle size={64} className="success-icon" />
+                                <p>Document processed successfully. Select next from queue.</p>
                             </div>
+                        ) : selectedItem ? (
+                            <p style={{ color: 'var(--text-muted)' }}>
+                                [ Render Document Details for {selectedItem.documentId} ]
+                            </p>
                         ) : (
-                            <div style={{ textAlign: 'center' }} aria-live="polite">
-                                <p>Select a document from the queue to start reviewing.</p>
-                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px' }}>Shortcuts: Ctrl+Enter (Approve), Ctrl+Backspace (Reject)</p>
+                            <p>Select a document from the queue to start reviewing.</p>
+                        )}
+                    </div>
+                </div>
+
+                {/* EXTRACTION FIELDS PANEL */}
+                <div className="extraction-panel glass-panel">
+                    <div className="panel-header" style={{ borderBottom: '1px solid var(--panel-border)', paddingBottom: '12px' }}>
+                        <CheckCircle size={16} /> Extracted Fields
+                    </div>
+
+                    <div className="extraction-content">
+                        {selectedItem ? (
+                            <>
+                                <div className="field-grid">
+                                    {fields.map((field, idx) => {
+                                        const isLowConfidence = field.confidence < 0.8;
+                                        return (
+                                            <div className="field-group" key={idx}>
+                                                <div className="field-header">
+                                                    <span className="field-label">{field.key}</span>
+                                                    <span className="field-confidence" title={`Confidence score: ${Math.round(field.confidence * 100)}%`}>
+                                                        {isLowConfidence ? (
+                                                            <span className="low-confidence-icon"><AlertTriangle size={14} /> {Math.round(field.confidence * 100)}%</span>
+                                                        ) : (
+                                                            <span className="high-confidence-icon"><Check size={14} /> {Math.round(field.confidence * 100)}%</span>
+                                                        )}
+                                                    </span>
+                                                </div>
+                                                <div className={`field-input-wrapper ${isLowConfidence ? 'low-confidence' : ''}`}>
+                                                    <input
+                                                        type="text"
+                                                        className="field-input"
+                                                        value={field.value}
+                                                        aria-label={field.key}
+                                                        onChange={(e) => handleFieldChange(idx, e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                                <div className="action-bar">
+                                    <button className="btn-secondary" onClick={() => fetchQueueAndStats()} disabled={isSubmitting}>
+                                        Reset
+                                    </button>
+                                    <button className="btn-danger" onClick={handleReject} disabled={isSubmitting} aria-label="Reject Document">
+                                        Reject
+                                    </button>
+                                    <button className="btn-primary" onClick={handleApprove} disabled={isSubmitting} aria-label="Approve Document">
+                                        {isSubmitting ? 'Submitting...' : 'Approve & Submit (Ctrl+Enter)'}
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+                                {successState ? "Awaiting selection..." : "No fields to display. Select a document."}
                             </div>
                         )}
                     </div>
                 </div>
 
-                {/* EXTRACTION FIELDS */}
-                <div className="extraction-panel glass-panel">
-                    <div className="panel-header" style={{ borderBottom: 'none', padding: '0 0 16px 0' }}>
-                        EXTRACTED FIELDS
-                    </div>
-
-                    <div className="field-grid">
-                        {selectedItem ? fields.map((field, idx) => {
-                            const isLowConfidence = field.confidence < 0.8;
-                            return (
-                                <React.Fragment key={idx}>
-                                    <div className="field-label">{field.key}:</div>
-                                    <div className={`field-input-wrapper ${isLowConfidence ? 'low-confidence' : ''}`}>
-                                        <span className="bracket">[</span>
-                                        <input
-                                            type="text"
-                                            className="field-input"
-                                            value={field.value}
-                                            aria-label={field.key}
-                                            onChange={(e) => handleFieldChange(idx, e.target.value)}
-                                        />
-                                        <span className="bracket">]</span>
-                                    </div>
-                                    <div className="field-confidence">
-                                        {isLowConfidence ? (
-                                            <span className="confidence-indicator low-confidence-icon">
-                                                <AlertTriangle size={16} /> {Math.round(field.confidence * 100)}%
-                                            </span>
-                                        ) : (
-                                            <span className="confidence-indicator high-confidence-icon">
-                                                <Check size={16} /> {Math.round(field.confidence * 100)}%
-                                            </span>
-                                        )}
-                                    </div>
-                                </React.Fragment>
-                            )
-                        }) : (
-                            <p style={{ color: 'var(--text-muted)' }}>No fields to display.</p>
-                        )}
-                    </div>
-
-                    <div className="action-bar" style={{ marginTop: '32px' }}>
-                        <button className="btn-approve" onClick={handleApprove} disabled={isSubmitting} aria-label="Approve Document">
-                            {isSubmitting ? '[Submitting...]' : '[Approve]'}
-                        </button>
-                        <button className="btn-correct" onClick={handleCorrect} disabled={isSubmitting} aria-label="Correct Document">
-                            [Correct]
-                        </button>
-                        <button className="btn-reject" onClick={handleReject} disabled={isSubmitting} aria-label="Reject Document">
-                            [Reject]
-                        </button>
-                    </div>
-                </div>
             </div>
         </div>
-    )
+    );
 }
