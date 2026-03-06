@@ -3,12 +3,12 @@
   "document_type": "invoice",
   "tenant_id": "default",
   "schema_version": "1.0",
-  "processed_at": "2026-03-06T11:42:47.529881Z",
+  "processed_at": "2026-03-06T12:43:16.432813Z",
   "content_hash": "cdb612f6aad59af1377ee5b748590c5b8e4791f7fda6bdd3b5fbcd665546a22e",
   "needs_review": false,
   "validation_errors": [],
   "quality_metrics": {
-    "avg_confidence": 0.92,
+    "avg_confidence": 0.9333,
     "min_confidence": 0.87,
     "max_confidence": 0.99,
     "total_fields": 6,
@@ -17,21 +17,21 @@
   },
   "audit_trail": [
     {
-      "timestamp": "2026-03-06T11:42:47.529881Z",
+      "timestamp": "2026-03-06T12:43:16.431170Z",
       "event": "status_change",
       "details": {
         "to": "QUEUED"
       }
     },
     {
-      "timestamp": "2026-03-06T11:42:47.529881Z",
+      "timestamp": "2026-03-06T12:43:16.432256Z",
       "event": "status_change",
       "details": {
         "to": "PROCESSING"
       }
     },
     {
-      "timestamp": "2026-03-06T11:42:47.529881Z",
+      "timestamp": "2026-03-06T12:43:16.432813Z",
       "event": "extraction_complete",
       "details": {
         "fields_extracted": [
@@ -67,7 +67,7 @@
   "invoice_date_confidence": 0.92,
   "invoice_date_source": "AI",
   "total_amount": 1279.5,
-  "total_amount_confidence": 0.91,
+  "total_amount_confidence": 0.99,
   "total_amount_source": "AI",
   "tax_amount": 55.9,
   "tax_amount_confidence": 0.87,

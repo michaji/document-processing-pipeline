@@ -3,7 +3,7 @@
   "document_type": "invoice",
   "tenant_id": "default",
   "schema_version": "1.0",
-  "processed_at": "2026-03-06T12:31:31.569610Z",
+  "processed_at": "2026-03-06T12:49:02.954828Z",
   "content_hash": "3f756eef90914369e210e34421058642d588ccec6e1b4705239f689afd9c3beb",
   "needs_review": false,
   "validation_errors": [],
@@ -17,21 +17,21 @@
   },
   "audit_trail": [
     {
-      "timestamp": "2026-03-06T12:31:22.781161Z",
+      "timestamp": "2026-03-06T12:49:01.717766Z",
       "event": "status_change",
       "details": {
         "to": "QUEUED"
       }
     },
     {
-      "timestamp": "2026-03-06T12:31:22.781161Z",
+      "timestamp": "2026-03-06T12:49:01.717766Z",
       "event": "status_change",
       "details": {
         "to": "PROCESSING"
       }
     },
     {
-      "timestamp": "2026-03-06T12:31:31.569610Z",
+      "timestamp": "2026-03-06T12:49:02.954828Z",
       "event": "extraction_complete",
       "details": {
         "fields_extracted": [

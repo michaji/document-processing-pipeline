@@ -26,6 +26,8 @@ import pandas as pd
 import groq
 from dotenv import load_dotenv
 
+from src.infrastructure import redis_client, SessionLocal, DocumentMetadata
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -96,18 +98,28 @@ class CircuitBreaker:
 
 
 # ---------------------------------------------------------------------------
-# Thread-safe Idempotency Store (in-memory; swap for Redis/DB in production)
+# Thread-safe Idempotency Store (Redis with fallback to in-memory)
 # ---------------------------------------------------------------------------
 class IdempotencyStore:
     def __init__(self):
         self._store: Dict[str, Dict] = {}
         self._lock = threading.Lock()
+        self.redis = redis_client
+        self.ttl = int(os.getenv("REDIS_TTL_SECONDS", "7776000"))
 
     def get(self, key: str) -> Optional[Dict]:
+        if self.redis:
+            val = self.redis.get(key)
+            if val:
+                return json.loads(val)
+            return None
         with self._lock:
             return self._store.get(key)
 
     def save(self, key: str, record: Dict):
+        if self.redis:
+            self.redis.set(key, json.dumps(record), ex=self.ttl)
+            return
         with self._lock:
             self._store[key] = record
 
@@ -280,6 +292,7 @@ class ExtractionModule:
             audit.append(_make_audit_event("status_change", {"to": final_status}))
             self.idempotency_store.save(ido_key, {"status": final_status, "output": output, "audit": audit})
 
+            self._save_metadata(output, final_status)
             return final_status, output
 
         except Exception as exc:
@@ -404,18 +417,45 @@ Content:
             "quality_score": round((len(conf_values) - below) / len(conf_values), 4),
         }
 
-    def _write_outputs(self, document_id: str, data: Dict[str, Any]):
-        """Write to JSON and Parquet, both tagged with schema_version."""
-        # JSON
+    def _write_outputs(self, document_id: str, output: Dict):
+        """Write extraction output to Dual formats: JSON and Parquet."""
         json_path = os.path.join(self.output_dir, "json", f"{document_id}.json")
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(output, f, indent=2)
 
-        # Parquet — flatten nested dicts (audit_trail, quality_metrics) to JSON strings
-        flat = {
-            k: (json.dumps(v, default=str) if isinstance(v, (dict, list)) else v)
-            for k, v in data.items()
-        }
         parquet_path = os.path.join(self.output_dir, "parquet", f"{document_id}.parquet")
-        df = pd.DataFrame([flat])
+        # Flatten audit trail / complex types for Pandas if needed
+        flat_output = {**output}
+        flat_output["validation_errors"] = json.dumps(flat_output["validation_errors"])
+        flat_output["quality_metrics"] = json.dumps(flat_output["quality_metrics"])
+        flat_output["audit_trail"] = json.dumps(flat_output["audit_trail"])
+
+        df = pd.DataFrame([flat_output])
         df.to_parquet(parquet_path, engine="pyarrow", compression="snappy", index=False)
+
+    def _save_metadata(self, output: Dict, status: ProcessingStatus):
+        """Save document metadata to Postgres if connected."""
+        if not SessionLocal:
+            return
+
+        try:
+            with SessionLocal() as session:
+                doc = session.query(DocumentMetadata).filter_by(document_id=output["document_id"]).first()
+                if not doc:
+                    doc = DocumentMetadata(
+                        document_id=output["document_id"],
+                        tenant_id=output["tenant_id"],
+                        created_at=datetime.now(timezone.utc).replace(tzinfo=None)
+                    )
+                
+                doc.document_type = output["document_type"]
+                doc.status = status.value
+                doc.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                doc.extracted_data = {k: v for k, v in output.items() if k not in ["audit_trail", "validation_errors", "quality_metrics"]}
+                doc.audit_trail = output.get("audit_trail", [])
+                doc.needs_review = 1 if output.get("needs_review") else 0
+                
+                session.add(doc)
+                session.commit()
+        except Exception as e:
+            logger.error("Failed to save metadata to Postgres for %s: %s", output["document_id"], e)

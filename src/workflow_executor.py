@@ -18,12 +18,17 @@ Key capabilities:
 """
 
 import inspect
+import json
 import logging
+import os
 import random
 import threading
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed, wait, FIRST_EXCEPTION
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future, wait, FIRST_EXCEPTION
+from datetime import datetime, timezone
+
+from src.infrastructure import redis_client
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -179,22 +184,71 @@ class CheckpointStore:
     def __init__(self):
         self._store: Dict[str, Dict[str, StepResult]] = {}
         self._lock = threading.Lock()
+        self.redis = redis_client
+        self.ttl = int(os.getenv("REDIS_TTL_SECONDS", "7776000"))
+
+    def _serialize(self, result: StepResult) -> str:
+        data = {
+            "step_name": result.step_name,
+            "status": result.status.value,
+            "output": result.output,
+            "error": result.error,
+            "attempts": result.attempts,
+            "started_at": result.started_at,
+            "finished_at": result.finished_at,
+        }
+        return json.dumps(data, default=str)
+        
+    def _deserialize(self, data_str: str) -> StepResult:
+        data = json.loads(data_str)
+        return StepResult(
+            step_name=data["step_name"],
+            status=StepStatus(data["status"]),
+            output=data["output"],
+            error=data["error"],
+            attempts=data["attempts"],
+            started_at=data["started_at"],
+            finished_at=data["finished_at"],
+        )
 
     def save(self, workflow_id: str, step_name: str, result: StepResult):
+        if self.redis:
+            key = f"checkpoint:{workflow_id}"
+            self.redis.hset(key, step_name, self._serialize(result))
+            self.redis.expire(key, self.ttl)
+            return
+
         with self._lock:
             if workflow_id not in self._store:
                 self._store[workflow_id] = {}
             self._store[workflow_id][step_name] = result
 
     def load(self, workflow_id: str) -> Dict[str, StepResult]:
+        if self.redis:
+            key = f"checkpoint:{workflow_id}"
+            raw = self.redis.hgetall(key)
+            return {step: self._deserialize(data) for step, data in raw.items()}
+
         with self._lock:
             return dict(self._store.get(workflow_id, {}))
 
     def get_step(self, workflow_id: str, step_name: str) -> Optional[StepResult]:
+        if self.redis:
+            key = f"checkpoint:{workflow_id}"
+            val = self.redis.hget(key, step_name)
+            if val:
+                return self._deserialize(val)
+            return None
+
         with self._lock:
             return self._store.get(workflow_id, {}).get(step_name)
 
     def clear(self, workflow_id: str):
+        if self.redis:
+            key = f"checkpoint:{workflow_id}"
+            self.redis.delete(key)
+            return
+
         with self._lock:
             self._store.pop(workflow_id, None)
 
